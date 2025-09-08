@@ -1,4 +1,7 @@
+
 # Tree of Agents (TOA)
+
+**This project is associated with the paper "Tree of Agents: Improving Long-Context Capabilities of Large Language Models through Multi-Perspective Reasoning," which has been accepted for publication as part of EMNLP 2025 Findings.** 📄
 
 This project provides a modular framework for building and evaluating multi-agent reasoning systems on long documents such as novels or stories. It is designed to work with large language models (LLMs) through APIs (OpenAI-compatible, local deployment, etc.), allowing agents to collaborate and debate over document comprehension tasks.
 
@@ -58,12 +61,7 @@ You can find datasets in [Phospheneser/DetectiveQA](https://huggingface.co/datas
 ### 4. Run an experiment
 
 ```bash
-python run.py \
-  --model llama \
-  --dataset DetectiveQA \
-  --sample_num 100 \
-  --agent_num 5 \
-  --repetition_num 1
+python run.py   --model llama   --dataset DetectiveQA   --sample_num 100   --agent_num 5   --repetition_num 1
 ```
 
 ### Parameters
@@ -84,7 +82,10 @@ python run.py \
 
 If you use this codebase in your research, please cite appropriately or link back to the repository.
 
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details. 📝
+
 ---
 
-Feel free to extend the agents, customize the prompts, or plug in your own LLMs for research or product development.
-
+Feel free to extend the agents, customize the prompts, or plug in your own LLMs for research or product development. 🚀
