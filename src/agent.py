@@ -1,109 +1,78 @@
-import backoff
-from openai import OpenAI, RateLimitError, APIError, APIConnectionError
-from requests.exceptions import JSONDecodeError, ConnectTimeout
-from urllib3.exceptions import ConnectTimeoutError
+import os
 from typing import Optional
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+DEFAULT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
 class BaseAgent:
-    def __init__(self, id: Optional[str] = None, api_key: Optional[str] = None,
-                 name: Optional[str] = None, model: Optional[str] = None,
-                 base_url: Optional[str] = None):
-        """
-        Base agent class for LLM interactions. Subclasses should implement generate_response.
-        """
+    def __init__(self, id: Optional[int] = None, model: Optional[str] = None,
+                 max_new_tokens: int = 2048):
         self.id = id
-        self.api_key = api_key
-        self.name = name
         self.model = model
-        self.base_url = base_url  # Added to support flexible deployments
-
-        self.explanation = ""
-        self.claim = ""
-        self.docs = ""
-        self.fact = ""
-        self.conclusion = ""
-        self.inspired = ""
-        self.message = []
-        self.helpful = {}
-        self.opinions = {}
-        self.sequence = []
-        self.useless_sequence = []
-        self.final_decision = ""
-        self.last = ""
-        self.options = ""
-
-    def print_attributes(self):
-        """Print all agent attributes for debugging."""
-        print(f"Agent attributes for {self.__class__.__name__}:")
-        for attr, value in self.__dict__.items():
-            print(f"  {attr}: {value}")
+        self.max_new_tokens = max_new_tokens
+        self.reset()
 
     def reset(self):
-        """Reset agent state between runs."""
-        self.explanation = ""
         self.claim = ""
-        self.docs = ""
+        self.options = ""
         self.fact = ""
         self.conclusion = ""
-        self.inspired = ""
-        self.message = []
-        self.helpful = {}
-        self.opinions = {}
-        self.sequence = []
-        self.useless_sequence = []
         self.final_decision = ""
-        self.last = ""
-        self.options = ""
 
-    @backoff.on_exception(
-        backoff.expo,
-        (RateLimitError, APIError, APIConnectionError, ValueError,
-         JSONDecodeError, ConnectTimeout, ConnectTimeoutError),
-        max_tries=5
-    )
-    def generate_response(self, message):
-        raise NotImplementedError("Subclasses must implement this method.")
-
-
-class DeepSeek(BaseAgent):
-    def __init__(self, **kwargs):
-        """
-        Initialize DeepSeek agent with optional overrides.
-        """
-        super().__init__(**kwargs)
-        if self.base_url is None:
-            self.base_url = "https://api.deepseek.com"  # Default value, can be overridden
-
-    def generate_response(self, message):
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=message,
-            stream=False,
-            temperature=0,
-            response_format={"type": "json_object"}
-        )
-        return response.choices[0].message.content
+    def generate_response(self, messages):
+        raise NotImplementedError
 
 
 class LocalLlama(BaseAgent):
-    def __init__(self, **kwargs):
-        """
-        Initialize LocalLlama agent for local deployment use.
-        """
-        super().__init__(**kwargs)
-        if self.base_url is None:
-            self.base_url = "http://127.0.0.1:8000/v1"  # Default local URL
+    _model = None
+    _tokenizer = None
+    _model_path = None
 
-    def generate_response(self, message):
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=message,
-            temperature=0,
-            top_p=0,
-            max_tokens=2048,
-            response_format={"type": "json_object"}
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.model_path = self.model or os.getenv("MODEL_PATH") or os.getenv("TOKENIZER_PATH") or DEFAULT_MODEL
+        self.load_model(self.model_path)
+
+    @classmethod
+    def load_model(cls, model_path):
+        if cls._model is not None and cls._model_path == model_path:
+            return
+
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        device_map = "auto" if torch.cuda.is_available() else None
+        cls._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        cls._model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=dtype,
+            device_map=device_map,
+            trust_remote_code=True,
         )
-        return response.choices[0].message.content
+        cls._model.eval()
+        cls._model_path = model_path
+
+        if cls._tokenizer.pad_token_id is None:
+            cls._tokenizer.pad_token = cls._tokenizer.eos_token
+
+    def generate_response(self, messages):
+        tokenizer = self.__class__._tokenizer
+        model = self.__class__._model
+        input_ids = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        ).to(model.device)
+
+        with torch.inference_mode():
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+
+        return tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True).strip()
